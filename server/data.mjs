@@ -2224,6 +2224,16 @@ const performCheck = async (monitorId, reason = "manual") => {
     await pruneMonitorHistory(monitor.id);
     emitChange({ type: "check-completed", monitorId: monitor.id, reason });
 
+    // Trigger analysis for healthy monitors if no analysis exists yet
+    if (check.status === "up" && !nextIncident && !monitor.lastAnalysisId) {
+      await enqueueJob({
+        type: "monitor.analysis",
+        priority: 100,
+        dedupeKey: `analysis:healthy-first:${monitor.id}`,
+        payload: { monitorId: monitor.id, incidentId: null, source: "automatic", eventType: "healthy" },
+      });
+    }
+
     return {
       monitor: await summarizeMonitor(await getMonitorRow(monitor.id)),
       check,
