@@ -23,3 +23,8 @@ server/runtime/
 *.njsproj
 *.sln
 *.sw?
+
+# Database files
+sentinel-db/
+*.db
+*.sqlite
