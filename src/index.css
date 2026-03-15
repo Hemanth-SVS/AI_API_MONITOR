@@ -1,0 +1,148 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+
+    --background: 220 30% 7%;
+    --foreground: 214 32% 91%;
+
+    --card: 220 22% 11%;
+    --card-foreground: 214 32% 91%;
+
+    --popover: 220 24% 10%;
+    --popover-foreground: 214 32% 91%;
+
+    --primary: 144 73% 58%;
+    --primary-foreground: 156 67% 8%;
+
+    --secondary: 220 20% 15%;
+    --secondary-foreground: 214 32% 85%;
+
+    --muted: 220 18% 14%;
+    --muted-foreground: 220 12% 56%;
+
+    --accent: 220 18% 14%;
+    --accent-foreground: 214 32% 91%;
+
+    --destructive: 351 95% 68%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 18% 18%;
+    --input: 220 18% 18%;
+    --ring: 144 73% 58%;
+
+    --radius: 0.875rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply bg-background;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background:
+      radial-gradient(circle at top left, rgba(74, 222, 128, 0.1), transparent 24%),
+      radial-gradient(circle at top right, rgba(56, 189, 248, 0.07), transparent 22%),
+      linear-gradient(180deg, #05080d 0%, #090d13 45%, #070b10 100%);
+    font-family: "IBM Plex Sans", sans-serif;
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply tracking-tight text-foreground;
+    font-family: "Space Grotesk", sans-serif;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .font-display {
+    font-family: "Space Grotesk", sans-serif;
+  }
+
+  .card-surface {
+    @apply rounded-[1.5rem] border bg-card shadow-[0_20px_60px_rgba(0,0,0,0.22)];
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .status-dot {
+    @apply h-3 w-3 rounded-full;
+  }
+
+  .status-dot-up {
+    @apply status-dot bg-emerald-400;
+    box-shadow: 0 0 16px rgba(74, 222, 128, 0.34);
+  }
+
+  .status-dot-down {
+    @apply status-dot bg-rose-500;
+    box-shadow: 0 0 16px rgba(244, 63, 94, 0.34);
+  }
+
+  .status-dot-degraded {
+    @apply status-dot bg-amber-300;
+    box-shadow: 0 0 16px rgba(252, 211, 77, 0.3);
+  }
+
+  .status-dot-pending {
+    @apply status-dot bg-slate-500;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+
+.hb-tooltip {
+  @apply absolute z-50 rounded-xl border border-white/10 bg-[#111823]/95 px-3 py-2 text-xs text-slate-200 shadow-[0_18px_40px_rgba(0,0,0,0.35)];
+  backdrop-filter: blur(18px);
+  white-space: nowrap;
+  transform: translateX(-50%) translateY(-100%);
+}
+
+.kuma-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.kuma-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.kuma-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+}
+
+.kuma-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.28);
+}
+
+#root {
+  min-height: 100vh;
+}
