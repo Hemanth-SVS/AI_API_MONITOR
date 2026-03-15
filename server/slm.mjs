@@ -1,9 +1,38 @@
 import { getSlmSettings } from "./store.mjs";
 
+// Response cache for faster repeated queries
+const responseCache = new Map();
+const CACHE_TTL_MS = 30000; // 30 seconds
+
 let cachedAvailability = {
   checkedAt: 0,
   fingerprint: "",
   value: null,
+};
+
+const getCacheKey = (context) => {
+  const { monitor, recentChecks } = context;
+  const checkHash = recentChecks.slice(0, 2).map(c => c.status + c.statusCode).join(',');
+  return `${monitor.id}:${monitor.status}:${checkHash}`;
+};
+
+const getCachedAnalysis = (context) => {
+  const key = getCacheKey(context);
+  const cached = responseCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+  return null;
+};
+
+const setCachedAnalysis = (context, data) => {
+  const key = getCacheKey(context);
+  responseCache.set(key, { data, timestamp: Date.now() });
+  // Cleanup old entries
+  if (responseCache.size > 50) {
+    const oldest = responseCache.keys().next().value;
+    responseCache.delete(oldest);
+  }
 };
 
 const clampConfidence = (value, fallback = 0.62) => {
@@ -45,15 +74,11 @@ const parseJsonObject = (text) => {
 };
 
 const summarizeChecks = (recentChecks = []) =>
-  recentChecks.slice(0, 8).map((check) => ({
-    checkedAt: check.checkedAt,
+  recentChecks.slice(0, 4).map((check) => ({
     status: check.status,
     statusCode: check.statusCode,
     latencyMs: check.latencyMs,
     classification: check.classification,
-    message: check.message,
-    responsePreview: check.responseBody ?? check.responsePreview,
-    evidence: check.evidence ?? {},
   }));
 
 const fallbackHealthyAnalysis = ({ monitor, recentChecks }) => {
@@ -270,8 +295,10 @@ const generateText = async (prompt, { format } = {}) => {
           ...(format ? { format } : {}),
           options: {
             temperature: 0.1,
-            num_ctx: 3072,  // Limit context size to speed up generation
-            num_predict: 350,   // Prevent rambling by capping output tokens
+            num_ctx: 1024,
+            num_predict: 150,
+            top_k: 20,
+            top_p: 0.9,
           },
         }),
         signal: AbortSignal.timeout(slmConfig.timeoutMs),
@@ -297,7 +324,7 @@ const generateText = async (prompt, { format } = {}) => {
       body: JSON.stringify({
         model: slmConfig.model,
         temperature: 0.1,
-        max_tokens: 350,
+        max_tokens: 150,
         ...(format === "json" ? { response_format: { type: "json_object" } } : {}),
         messages: [
           {
@@ -399,61 +426,27 @@ export const checkSlmAvailability = async ({ force = false } = {}) => {
 };
 
 const buildMonitorPrompt = ({ monitor, recentChecks, incident, relatedActivity, retrievalMatches }) => `
-You are Auto-Ops Sentinel, a reliability analyst for a production monitoring system.
-You MUST output EXACTLY one valid JSON object and absolutely nothing else.
-NO markdown code blocks around the JSON. Look at the exact required keys below.
+You are Auto-Ops Sentinel, a reliability analyst. Output STRICT JSON only.
 
-Required JSON Structure:
+JSON Schema:
 {
-  "facts": ["fact 1 (max 15 words)", "fact 2 (max 15 words)"],
-  "probableRootCause": "Brief root cause string",
+  "facts": ["2-4 short facts"],
+  "rootCause": "one line root cause",
   "confidence": 0.85,
-  "blastRadius": "Brief blast radius string",
-  "recommendedChecks": ["check 1", "check 2"],
-  "suggestedFixes": ["fix 1", "fix 2"],
-  "reportSummary": "1 sentence executive summary.",
-  "citations": ["source_id_here"]
+  "impact": "one line blast radius",
+  "checks": ["2-3 quick checks"],
+  "fixes": ["2-3 suggested fixes"],
+  "summary": "one sentence summary"
 }
 
-Rules:
-- \`facts\`: 2-4 strings
-- \`citations\`: array of valid source ids
-- \`confidence\`: number between 0 and 1
-- \`recommendedChecks\`: 2-4 concise strings (max 10 words each)
-- \`suggestedFixes\`: 2-4 concise strings (max 10 words each)
-- Stay grounded in evidence. Be extremely brief. Provide ONLY JSON.
+Monitor: ${monitor.name} | Status: ${monitor.status} | Uptime: ${monitor.uptime24h?.toFixed(1) ?? 'N/A'}%
+URL: ${monitor.url} | Method: ${monitor.method} | Env: ${monitor.environment}
 
-Monitor:
-${JSON.stringify(
-  {
-    id: monitor.id,
-    name: monitor.name,
-    type: monitor.type,
-    url: monitor.url,
-    method: monitor.method,
-    status: monitor.status,
-    intervalSeconds: monitor.intervalSeconds,
-    timeoutMs: monitor.timeoutMs,
-    environment: monitor.environment,
-    owner: monitor.owner,
-    uptime24h: monitor.uptime24h,
-    avgLatencyMs: monitor.avgLatencyMs,
-  },
-  null,
-  2,
-)}
+Last 4 Checks:
+${JSON.stringify(summarizeChecks(recentChecks))}
 
-Recent checks:
-${JSON.stringify(summarizeChecks(recentChecks), null, 2)}
-
-Incident:
-${JSON.stringify(incident ?? null, null, 2)}
-
-Recent activity:
-${JSON.stringify(relatedActivity.slice(0, 8), null, 2)}
-
-Historical retrieval matches:
-${JSON.stringify(retrievalMatches ?? [], null, 2)}
+Incident: ${incident ? incident.title : 'None'}
+Activity: ${relatedActivity.slice(0, 3).map(a => a.type).join(', ') || 'None'}
 `;
 
 const buildOpsPrompt = ({ question, dashboardSnapshot, monitorContext, incidentContext, retrievalMatches, timeWindow }) => `
@@ -486,11 +479,18 @@ ${question}
 export const generateMonitorAnalysis = async (context) => {
   const availability = await checkSlmAvailability();
   const slmConfig = await getSlmSettings();
+  
+  // Check cache first
+  const cached = getCachedAnalysis(context);
+  if (cached) {
+    return { ...cached, cached: true };
+  }
+  
   const prompt = buildMonitorPrompt(context);
   const fallback = fallbackMonitorAnalysis(context);
 
   if (!availability.reachable) {
-    return {
+    const result = {
       ...fallback,
       mode: "fallback",
       provider: "fallback",
@@ -506,6 +506,8 @@ export const generateMonitorAnalysis = async (context) => {
       timeWindowStart: context.timeWindow?.start ?? null,
       timeWindowEnd: context.timeWindow?.end ?? null,
     };
+    setCachedAnalysis(context, result);
+    return result;
   }
 
   let rawResponse = null;
@@ -520,14 +522,14 @@ export const generateMonitorAnalysis = async (context) => {
       throw new Error("SLM returned non-JSON monitor analysis.");
     }
 
-    return {
+    const result = {
       facts: safeArray(parsedResponse.facts, fallback.facts),
-      probableRootCause: String(parsedResponse.probableRootCause ?? fallback.probableRootCause),
+      probableRootCause: String(parsedResponse.rootCause ?? parsedResponse.probableRootCause ?? fallback.probableRootCause),
       confidence: clampConfidence(parsedResponse.confidence, fallback.confidence),
-      blastRadius: String(parsedResponse.blastRadius ?? fallback.blastRadius),
-      recommendedChecks: safeArray(parsedResponse.recommendedChecks, fallback.recommendedChecks),
-      suggestedFixes: safeArray(parsedResponse.suggestedFixes, fallback.suggestedFixes),
-      reportSummary: String(parsedResponse.reportSummary ?? fallback.reportSummary),
+      blastRadius: String(parsedResponse.impact ?? parsedResponse.blastRadius ?? fallback.blastRadius),
+      recommendedChecks: safeArray(parsedResponse.checks ?? parsedResponse.recommendedChecks, fallback.recommendedChecks),
+      suggestedFixes: safeArray(parsedResponse.fixes ?? parsedResponse.suggestedFixes, fallback.suggestedFixes),
+      reportSummary: String(parsedResponse.summary ?? parsedResponse.reportSummary ?? fallback.reportSummary),
       evidence: fallback.evidence,
       mode: "live",
       provider: generated.provider,
@@ -543,8 +545,10 @@ export const generateMonitorAnalysis = async (context) => {
       timeWindowStart: context.timeWindow?.start ?? null,
       timeWindowEnd: context.timeWindow?.end ?? null,
     };
+    setCachedAnalysis(context, result);
+    return result;
   } catch (error) {
-    return {
+    const result = {
       ...fallback,
       mode: "fallback",
       provider: "fallback",
@@ -560,6 +564,8 @@ export const generateMonitorAnalysis = async (context) => {
       timeWindowStart: context.timeWindow?.start ?? null,
       timeWindowEnd: context.timeWindow?.end ?? null,
     };
+    setCachedAnalysis(context, result);
+    return result;
   }
 };
 
