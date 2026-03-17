@@ -371,7 +371,7 @@ const generateText = async (prompt, { format, systemMessage } = {}) => {
             temperature: 0.1,
             top_k: 20,
             top_p: 0.9,
-            num_ctx: 4096,
+            num_ctx: 2048,
             num_predict: 500,
           },
         }),
@@ -578,14 +578,10 @@ Historical retrieval matches:
 ${truncateTextTokens(JSON.stringify(retrievalMatches ?? [], null, 2), 1000)}
 `;
 
-const SYSTEM_OPS_PROMPT = `You are Auto-Ops Sentinel, an AI monitoring assistant.
-Your job is to answer the user's question using the provided dashboard state and evidence.
-RULES:
-1. If the user's input is mainly a conversational greeting (like "hello", "hi", "hey"), respond conversationally: "Hello! I am the Auto-Ops Sentinel assistant. How can I help you check your monitors today?". Ignore monitors that happen to be named "hello".
-2. If the user asks what you can do, briefly explain you can analyze incidents, summarize monitor health, and query logs.
-3. For operational questions about monitors, be helpful, concise, direct, and authoritative (2-3 sentences max).
-4. If asked about system status but the evidence is missing, state: "There is insufficient evidence to answer that definitively."
-5. Format your output as plain text.`;
+const SYSTEM_OPS_PROMPT = `You are Auto-Ops Sentinel, a monitoring assistant.
+Answer the user's question using the provided dashboard state and evidence.
+Be concise and direct. Max 3 sentences. Output plain text only.
+If the evidence does not contain relevant information, say so briefly.`;
 
 const buildOpsPrompt = ({ question, dashboardSnapshot, monitorContext, incidentContext, retrievalMatches, timeWindow }) => `
 Dashboard state:
@@ -739,6 +735,24 @@ const buildFallbackOpsAnswer = ({ question, dashboardSnapshot, monitorContext, r
 export const answerOpsQuestion = async ({ question, dashboardSnapshot, monitorContext, incidentContext, retrievalMatches, timeWindow }) => {
   const availability = await checkSlmAvailability();
   const slmConfig = await getSlmSettings();
+
+  // Handle greetings in code — don't trust a tiny model to follow complex instruction rules
+  const trimmed = question.trim().toLowerCase().replace(/[^a-z]/g, "");
+  const greetings = new Set(["hello", "hi", "hey", "hiya", "howdy", "greetings", "sup", "yo"]);
+  if (greetings.has(trimmed)) {
+    return {
+      answer: "Hello! I am the Auto-Ops Sentinel assistant. How can I help you check your monitors today?",
+      mode: "fallback",
+      provider: "fallback",
+      model: "greeting-shortcircuit",
+      citations: [],
+      retrievalMatches: [],
+      rawResponse: null,
+      failureReason: null,
+      slmConfig,
+      timeWindow,
+    };
+  }
   const prompt = buildOpsPrompt({
     question,
     dashboardSnapshot,
