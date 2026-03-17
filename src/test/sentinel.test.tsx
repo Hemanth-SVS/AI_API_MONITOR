@@ -56,7 +56,9 @@ const dashboardFixture = {
         mode: "fallback",
         provider: "ollama",
         model: "fallback-rules",
+        telemetry: { durationMs: 1500, promptTokens: 100, completionTokens: 50 },
         status: "completed",
+        reasoning: "The monitor is returning 401 Unauthorized, which typically means the auth configuration is out of date.",
         facts: ["Latest unhealthy check: status_code_mismatch."],
         probableRootCause: "Partner credentials drifted after a webhook secret rotation.",
         confidence: 0.82,
@@ -275,7 +277,7 @@ describe("Auto-Ops Sentinel", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /^signal analyst$/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /ask signal analyst/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Ask$/i })).toBeInTheDocument();
     });
   });
 });

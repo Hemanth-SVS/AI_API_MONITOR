@@ -28,3 +28,4 @@ server/runtime/
 sentinel-db/
 *.db
 *.sqlite
+sentinel-db.bak/

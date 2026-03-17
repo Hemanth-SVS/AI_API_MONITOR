@@ -51,6 +51,20 @@ const safeArray = (value, fallback = []) => {
     .slice(0, 8);
 };
 
+const estimateTokens = (text) => {
+  // A rough heuristic: ~4 characters per token for English text
+  return Math.ceil(String(text ?? "").length / 4);
+};
+
+// Truncate text to roughly target token length
+const truncateTextTokens = (text, maxTokens) => {
+  const str = String(text ?? "");
+  const estimatedTokens = estimateTokens(str);
+  if (estimatedTokens <= maxTokens) return str;
+  // Truncate based on the heuristic (maxTokens * 4) minus a buffer
+  const maxChars = Math.max(0, (maxTokens * 4) - 20);
+  return str.slice(0, maxChars) + "... (truncated)";
+};
 const trimFence = (text) => String(text ?? "").replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
 const parseJsonObject = (text) => {
@@ -90,6 +104,7 @@ const fallbackHealthyAnalysis = ({ monitor, recentChecks }) => {
   ];
 
   return {
+    reasoning: "The monitor is returning healthy statuses and there are no recent failures or degraded checks in the window.",
     facts,
     probableRootCause: "No active fault is visible in the latest monitor history.",
     confidence: 0.84,
@@ -124,6 +139,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
 
   if (joinedEvidence.includes("dns") || joinedEvidence.includes("enotfound") || joinedEvidence.includes("nxdomain")) {
     return {
+      reasoning: "The underlying network stack is returning an NXDOMAIN or ENOTFOUND error, indicating the hostname cannot be resolved to an IP address.",
       facts: evidence,
       probableRootCause: "Name resolution is failing for the target endpoint or one of its upstream dependencies.",
       confidence: 0.82,
@@ -143,6 +159,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
 
   if (joinedEvidence.includes("timeout") || joinedEvidence.includes("timed out") || joinedEvidence.includes("abort")) {
     return {
+      reasoning: "The connection dropped or the application took too long to respond, exceeding the monitor's configured timeout limit.",
       facts: evidence,
       probableRootCause: "The endpoint is timing out before it can return a healthy response.",
       confidence: 0.8,
@@ -162,6 +179,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
 
   if (joinedEvidence.includes("tls") || joinedEvidence.includes("ssl") || joinedEvidence.includes("certificate")) {
     return {
+      reasoning: "The secure socket layer handshake failed, likely due to an expired certificate, a hostname mismatch, or an untrusted issuer.",
       facts: evidence,
       probableRootCause: "The HTTPS handshake is failing because of a certificate or TLS configuration issue.",
       confidence: 0.79,
@@ -181,6 +199,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
 
   if ((latestIssue?.statusCode ?? 0) >= 500) {
     return {
+      reasoning: "The HTTP response contained a 5xx status code, indicating that the target server encountered an unexpected condition that prevented it from fulfilling the request.",
       facts: evidence,
       probableRootCause: "The application or an upstream dependency is returning server-side errors.",
       confidence: 0.76,
@@ -200,6 +219,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
 
   if (latestIssue?.statusCode === 401 || latestIssue?.statusCode === 403 || joinedEvidence.includes("unauthorized")) {
     return {
+      reasoning: "The endpoint is actively refusing to fulfill the request due to missing, invalid, or expired credentials.",
       facts: evidence,
       probableRootCause: "Authentication or authorization rules no longer match the monitor request.",
       confidence: 0.77,
@@ -218,6 +238,7 @@ const fallbackIssueAnalysis = ({ monitor, recentChecks, incident }) => {
   }
 
   return {
+    reasoning: "There is an active issue, but the specific failure mode does not cleanly match known network, timeout, TLS, server, or authorization patterns.",
     facts: evidence,
     probableRootCause: "The monitor has an unhealthy pattern, but the evidence is still broad and needs operator review.",
     confidence: 0.65,
@@ -281,79 +302,152 @@ const listAvailableModels = (payload, provider) => {
   return [...names];
 };
 
-const generateText = async (prompt, { format } = {}) => {
+const withRetry = async (fn, maxRetries = 2, baseDelayMs = 500) => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error) {
+      attempt++;
+      if (attempt > maxRetries) {
+        throw error;
+      }
+      
+      const isRetryable = error.name === "TimeoutError" || 
+                          error.message.includes("429") || 
+                          error.message.includes("503") ||
+                          error.message.includes("502");
+                          
+      if (!isRetryable) {
+        throw error;
+      }
+      
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      console.warn(`[SLM] Attempt ${attempt} failed, retrying in ${delay}ms... (${error.message})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
+const generateText = async (prompt, { format, systemMessage } = {}) => {
   const slmConfig = await getSlmSettings({ includeSecrets: true });
 
+  const executeRequest = async () => {
+    const startTime = performance.now();
+    let telemetry = { durationMs: 0, promptTokens: 0, completionTokens: 0 };
+
     if (slmConfig.provider === "ollama") {
-      const response = await fetch(buildOllamaUrl(slmConfig.baseUrl, "/api/generate"), {
+      const isJsonFormat = format === "json";
+      
+      // Ollama Schema for structured output
+      const jsonSchema = isJsonFormat ? {
+        type: "object",
+        properties: {
+          reasoning: { type: "string" },
+          facts: { type: "array", items: { type: "string" } },
+          probableRootCause: { type: "string" },
+          confidence: { type: "number" },
+          blastRadius: { type: "string" },
+          recommendedChecks: { type: "array", items: { type: "string" } },
+          suggestedFixes: { type: "array", items: { type: "string" } },
+          reportSummary: { type: "string" },
+          citations: { type: "array", items: { type: "string" } }
+        },
+        required: ["reasoning", "facts", "probableRootCause", "confidence", "blastRadius", "recommendedChecks", "suggestedFixes", "reportSummary"]
+      } : undefined;
+
+      const response = await fetch(buildOllamaUrl(slmConfig.baseUrl, "/api/chat"), {
         method: "POST",
         headers: getHeaders(slmConfig),
         body: JSON.stringify({
           model: slmConfig.model,
-          prompt,
+          messages: [
+            ...(systemMessage ? [{ role: "system", content: systemMessage }] : []),
+            { role: "user", content: prompt }
+          ],
           stream: false,
-          ...(format ? { format } : {}),
+          ...(isJsonFormat ? { format: jsonSchema || "json" } : {}),
           options: {
             temperature: 0.1,
-            num_ctx: 1024,
-            num_predict: 150,
             top_k: 20,
             top_p: 0.9,
+            num_ctx: 4096,
+            num_predict: 500,
           },
         }),
         signal: AbortSignal.timeout(slmConfig.timeoutMs),
       });
 
-    if (!response.ok) {
-      throw new Error(`SLM request failed with status ${response.status}`);
-    }
+      if (!response.ok) {
+        throw new Error(`SLM request failed with status ${response.status}`);
+      }
 
-    const payload = await response.json();
-    return {
-      text: String(payload.response ?? "").trim(),
-      provider: slmConfig.provider,
-      model: slmConfig.model,
-      slmConfig,
-    };
-  }
+      const payload = await response.json();
+      telemetry.durationMs = Math.round(performance.now() - startTime);
+      telemetry.promptTokens = payload.prompt_eval_count || estimateTokens(prompt);
+      telemetry.completionTokens = payload.eval_count || 0;
+      
+      console.log(`[SLM] Ollama request completed in ${telemetry.durationMs}ms (${telemetry.promptTokens} prompt tokens, ${telemetry.completionTokens} completion tokens)`);
 
-  if (slmConfig.provider === "openai-compatible") {
-    const response = await fetch(buildOpenAiCompatibleUrl(slmConfig.baseUrl, "/chat/completions"), {
-      method: "POST",
-      headers: getHeaders(slmConfig),
-      body: JSON.stringify({
+      return {
+        text: String(payload.message?.content ?? "").trim(),
+        provider: slmConfig.provider,
         model: slmConfig.model,
-        temperature: 0.1,
-        max_tokens: 150,
-        ...(format === "json" ? { response_format: { type: "json_object" } } : {}),
-        messages: [
-          {
-            role: "system",
-            content: "You are Auto-Ops Sentinel. Output strict concise JSON. Max 15 words per array item. No markdown formatting outside of strict JSON structure.",
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(slmConfig.timeoutMs),
-    });
-
-    if (!response.ok) {
-      throw new Error(`SLM request failed with status ${response.status}`);
+        telemetry,
+        slmConfig,
+      };
     }
 
-    const payload = await response.json();
-    return {
-      text: String(payload?.choices?.[0]?.message?.content ?? "").trim(),
-      provider: slmConfig.provider,
-      model: slmConfig.model,
-      slmConfig,
-    };
-  }
+    if (slmConfig.provider === "openai-compatible") {
+      const isJsonFormat = format === "json";
+      
+      const response = await fetch(buildOpenAiCompatibleUrl(slmConfig.baseUrl, "/chat/completions"), {
+        method: "POST",
+        headers: getHeaders(slmConfig),
+        body: JSON.stringify({
+          model: slmConfig.model,
+          temperature: 0.1,
+          top_p: 0.9,
+          max_tokens: 500,
+          ...(isJsonFormat ? { response_format: { type: "json_object" } } : {}),
+          messages: [
+            {
+              role: "system",
+              content: systemMessage || "You are an assistant.",
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(slmConfig.timeoutMs),
+      });
 
-  throw new Error(`Unsupported SLM provider "${slmConfig.provider}".`);
+      if (!response.ok) {
+        throw new Error(`SLM request failed with status ${response.status}`);
+      }
+
+      const payload = await response.json();
+      telemetry.durationMs = Math.round(performance.now() - startTime);
+      telemetry.promptTokens = payload.usage?.prompt_tokens || estimateTokens(prompt);
+      telemetry.completionTokens = payload.usage?.completion_tokens || 0;
+
+      console.log(`[SLM] OpenAI request completed in ${telemetry.durationMs}ms (${telemetry.promptTokens} prompt tokens, ${telemetry.completionTokens} completion tokens)`);
+
+      return {
+        text: String(payload?.choices?.[0]?.message?.content ?? "").trim(),
+        provider: slmConfig.provider,
+        model: slmConfig.model,
+        telemetry,
+        slmConfig,
+      };
+    }
+
+    throw new Error(`Unsupported SLM provider "${slmConfig.provider}".`);
+  };
+
+  return withRetry(executeRequest);
 };
 
 export const getSlmConfig = async () => getSlmSettings();
@@ -425,51 +519,88 @@ export const checkSlmAvailability = async ({ force = false } = {}) => {
   return cachedAvailability.value;
 };
 
-const buildMonitorPrompt = ({ monitor, recentChecks, incident, relatedActivity, retrievalMatches }) => `
-You are Auto-Ops Sentinel, a reliability analyst. Output STRICT JSON only.
+const SYSTEM_MONITOR_PROMPT = `You are Auto-Ops Sentinel, a reliability analyst for a production monitoring system.
+You MUST output EXACTLY one valid JSON object and absolutely nothing else.
+NO markdown code blocks around the JSON. Look at the exact required keys below.
 
 JSON Schema:
 {
-  "facts": ["2-4 short facts"],
-  "rootCause": "one line root cause",
+  "reasoning": "Brief explanation of your thought process.",
+  "facts": ["fact 1 (max 15 words)", "fact 2 (max 15 words)"],
+  "probableRootCause": "Brief root cause string",
   "confidence": 0.85,
-  "impact": "one line blast radius",
-  "checks": ["2-3 quick checks"],
-  "fixes": ["2-3 suggested fixes"],
-  "summary": "one sentence summary"
+  "blastRadius": "one line blast radius",
+  "recommendedChecks": ["2-3 quick checks"],
+  "suggestedFixes": ["2-3 suggested fixes"],
+  "reportSummary": "one sentence summary"
 }
 
-Monitor: ${monitor.name} | Status: ${monitor.status} | Uptime: ${monitor.uptime24h?.toFixed(1) ?? 'N/A'}%
-URL: ${monitor.url} | Method: ${monitor.method} | Env: ${monitor.environment}
+Rules:
+- \`reasoning\`: Think step-by-step about what the evidence indicates before generating the final report. Keep this internal monologue brief (2-4 sentences).
+- \`facts\`: 2-5 strings, drawing ONLY from the provided evidence.
+- \`citations\`: array of valid source ids that back up your claims.
+- \`confidence\`: number between 0 and 1 representing your certainty.
+- \`recommendedChecks\`: 2-4 concise strings (max 12 words each) suggesting immediate diagnostic actions.
+- \`suggestedFixes\`: 2-4 concise strings (max 12 words each) suggesting likely remediations.
+- Stay grounded in evidence. Generate the reasoning field first. Provide ONLY JSON. Never invent facts.`;
 
-Last 4 Checks:
-${JSON.stringify(summarizeChecks(recentChecks))}
+const buildMonitorPrompt = ({ monitor, recentChecks, incident, relatedActivity, retrievalMatches }) => `
+Monitor:
+${JSON.stringify(
+  {
+    id: monitor.id,
+    name: monitor.name,
+    type: monitor.type,
+    url: monitor.url,
+    method: monitor.method,
+    status: monitor.status,
+    intervalSeconds: monitor.intervalSeconds,
+    timeoutMs: monitor.timeoutMs,
+    environment: monitor.environment,
+    owner: monitor.owner,
+    uptime24h: monitor.uptime24h,
+    avgLatencyMs: monitor.avgLatencyMs,
+  },
+  null,
+  2,
+)}
 
-Incident: ${incident ? incident.title : 'None'}
-Activity: ${relatedActivity.slice(0, 3).map(a => a.type).join(', ') || 'None'}
+Recent checks:
+${truncateTextTokens(JSON.stringify(summarizeChecks(recentChecks), null, 2), 1500)}
+
+Incident:
+${JSON.stringify(incident ?? null, null, 2)}
+
+Recent activity:
+${truncateTextTokens(JSON.stringify(relatedActivity.slice(0, 8), null, 2), 1000)}
+
+Historical retrieval matches:
+${truncateTextTokens(JSON.stringify(retrievalMatches ?? [], null, 2), 1000)}
 `;
 
+const SYSTEM_OPS_PROMPT = `You are Auto-Ops Sentinel, an AI monitoring assistant.
+Your job is to answer the user's question using the provided dashboard state and evidence.
+RULES:
+1. If the user's input is mainly a conversational greeting (like "hello", "hi", "hey"), respond conversationally: "Hello! I am the Auto-Ops Sentinel assistant. How can I help you check your monitors today?". Ignore monitors that happen to be named "hello".
+2. If the user asks what you can do, briefly explain you can analyze incidents, summarize monitor health, and query logs.
+3. For operational questions about monitors, be helpful, concise, direct, and authoritative (2-3 sentences max).
+4. If asked about system status but the evidence is missing, state: "There is insufficient evidence to answer that definitively."
+5. Format your output as plain text.`;
+
 const buildOpsPrompt = ({ question, dashboardSnapshot, monitorContext, incidentContext, retrievalMatches, timeWindow }) => `
-You are Auto-Ops Sentinel, an operator analyst.
-Answer the user's question using ONLY the supplied state snapshot and retrieved evidence.
-EXTREMELY IMPORTANT: Be extremely concise and output your answer as plain text. Do not ramble. Maximum 2 sentences.
+Dashboard state:
+${truncateTextTokens(JSON.stringify(dashboardSnapshot, null, 2), 1500)}
 
-If evidence is weak, say so.
-If asked about a time window, give exact timestamps.
+Selected monitor context:
+${truncateTextTokens(JSON.stringify(monitorContext, null, 2), 1000)}
 
-Dashboard:
-${JSON.stringify(dashboardSnapshot, null, 2)}
+Selected incident context:
+${truncateTextTokens(JSON.stringify(incidentContext, null, 2), 1000)}
 
-Selected monitor:
-${JSON.stringify(monitorContext, null, 2)}
+Retrieved factual evidence:
+${truncateTextTokens(JSON.stringify(retrievalMatches ?? [], null, 2), 2000)}
 
-Selected incident:
-${JSON.stringify(incidentContext, null, 2)}
-
-Retrieved evidence:
-${JSON.stringify(retrievalMatches ?? [], null, 2)}
-
-Time window:
+Time window of interest:
 ${JSON.stringify(timeWindow ?? null, null, 2)}
 
 Question:
@@ -514,7 +645,7 @@ export const generateMonitorAnalysis = async (context) => {
   let parsedResponse = null;
 
   try {
-    const generated = await generateText(prompt, { format: "json" });
+    const generated = await generateText(prompt, { format: "json", systemMessage: SYSTEM_MONITOR_PROMPT });
     rawResponse = generated.text;
     parsedResponse = parseJsonObject(rawResponse);
 
@@ -523,6 +654,7 @@ export const generateMonitorAnalysis = async (context) => {
     }
 
     const result = {
+      reasoning: String(parsedResponse.reasoning ?? fallback.reasoning ?? "No reasoning was provided by the model."),
       facts: safeArray(parsedResponse.facts, fallback.facts),
       probableRootCause: String(parsedResponse.rootCause ?? parsedResponse.probableRootCause ?? fallback.probableRootCause),
       confidence: clampConfidence(parsedResponse.confidence, fallback.confidence),
@@ -534,6 +666,7 @@ export const generateMonitorAnalysis = async (context) => {
       mode: "live",
       provider: generated.provider,
       model: generated.model,
+      telemetry: generated.telemetry,
       status: "completed",
       prompt,
       rawResponse,
@@ -586,7 +719,7 @@ const buildFallbackOpsAnswer = ({ question, dashboardSnapshot, monitorContext, r
 
   if (/why|root cause|cause/i.test(question) && monitorContext?.latestAnalysis) {
     return {
-      answer: monitorContext.latestAnalysis.reportSummary,
+      answer: `According to the latest Signal Analyst report: ${monitorContext.latestAnalysis.reportSummary}`,
       mode: "fallback",
       provider: "fallback",
       model: "fallback-rules",
@@ -595,9 +728,7 @@ const buildFallbackOpsAnswer = ({ question, dashboardSnapshot, monitorContext, r
   }
 
   return {
-    answer: `Current state: ${dashboardSnapshot.summary?.up ?? 0} up, ${degradedCount} degraded, ${downCount} down, and ${
-      dashboardSnapshot.summary?.openIncidents ?? 0
-    } open incidents. ${retrievalMatches?.[0] ? `Closest retrieved evidence: ${retrievalMatches[0].title}.` : "No historical evidence matched the question strongly."}`,
+    answer: `Current state: ${dashboardSnapshot.summary?.up ?? 0} up, ${degradedCount} degraded, ${downCount} down, and ${dashboardSnapshot.summary?.openIncidents ?? 0} open incidents. ${retrievalMatches?.[0] ? `Closest retrieved evidence: ${retrievalMatches[0].title}.` : "No historical evidence matched the question strongly."}`,
     mode: "fallback",
     provider: "fallback",
     model: "fallback-rules",
@@ -639,12 +770,13 @@ export const answerOpsQuestion = async ({ question, dashboardSnapshot, monitorCo
   }
 
   try {
-    const generated = await generateText(prompt);
+    const generated = await generateText(prompt, { systemMessage: SYSTEM_OPS_PROMPT });
     return {
       answer: generated.text,
       mode: "live",
       provider: generated.provider,
       model: generated.model,
+      telemetry: generated.telemetry,
       citations: retrievalMatches?.slice(0, 5).map((match) => match.sourceId) ?? [],
       retrievalMatches: retrievalMatches ?? [],
       prompt,

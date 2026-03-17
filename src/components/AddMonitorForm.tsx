@@ -255,6 +255,22 @@ export const AddMonitorForm = ({ mode, initialValue, isSubmitting, onCancel, onS
                   />
                 </div>
 
+                {(type === "http" || type === "keyword" || type === "json-query" || type === "websocket") && (
+                  <div className="xl:col-span-2">
+                    <label className="text-lg font-medium text-slate-200">{type === "websocket" ? "WebSocket URL" : "URL to Monitor"}</label>
+                    <Input
+                      className={`${fieldClassName} font-mono`}
+                      value={configValue(form.config, "url", form.url)}
+                      onChange={(event) => {
+                        const url = event.target.value;
+                        setForm((current) => ({ ...current, url }));
+                        setConfig({ url });
+                      }}
+                      placeholder={type === "websocket" ? "wss://api.example.com/stream" : "https://api.example.com/health"}
+                    />
+                  </div>
+                )}
+
                 <div className="xl:col-span-2">
                   <label className="text-lg font-medium text-slate-200">Description</label>
                   <Textarea
@@ -326,19 +342,6 @@ export const AddMonitorForm = ({ mode, initialValue, isSubmitting, onCancel, onS
               <div className="mt-6 grid gap-5 xl:grid-cols-2">
                 {(type === "http" || type === "keyword" || type === "json-query") && (
                   <>
-                    <div className="xl:col-span-2">
-                      <label className="text-lg font-medium text-slate-200">URL</label>
-                      <Input
-                        className={`${fieldClassName} font-mono`}
-                        value={configValue(form.config, "url", form.url)}
-                        onChange={(event) => {
-                          const url = event.target.value;
-                          setForm((current) => ({ ...current, url }));
-                          setConfig({ url });
-                        }}
-                        placeholder="https://api.example.com/health"
-                      />
-                    </div>
                     <div>
                       <label className="text-lg font-medium text-slate-200">Method</label>
                       <select
@@ -457,10 +460,6 @@ export const AddMonitorForm = ({ mode, initialValue, isSubmitting, onCancel, onS
 
                 {type === "websocket" && (
                   <>
-                    <div className="xl:col-span-2">
-                      <label className="text-lg font-medium text-slate-200">WebSocket URL</label>
-                      <Input className={fieldClassName} value={configValue(form.config, "url", form.url)} onChange={(event) => setConfig({ url: event.target.value })} />
-                    </div>
                     <div>
                       <label className="text-lg font-medium text-slate-200">Send Text</label>
                       <Input className={fieldClassName} value={configValue(form.config, "sendText")} onChange={(event) => setConfig({ sendText: event.target.value })} />

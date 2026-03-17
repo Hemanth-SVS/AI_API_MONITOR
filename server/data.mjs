@@ -3003,6 +3003,7 @@ const searchHistoricalEvidence = async (question, { monitorId = null, incidentId
         WHERE "occurredAt" BETWEEN $1 AND $2
           AND ($3::text IS NULL OR "monitorId" = $3)
           AND ($4::text IS NULL OR "incidentId" = $4)
+          AND "sourceType" != 'ops-query'
         ORDER BY "occurredAt" ASC
         LIMIT $5
       `,
@@ -3039,6 +3040,7 @@ const searchHistoricalEvidence = async (question, { monitorId = null, incidentId
           WHERE to_tsvector('simple', COALESCE("title", '') || ' ' || COALESCE("body", '')) @@ websearch_to_tsquery('simple', $1)
             AND ($2::text IS NULL OR "monitorId" = $2)
             AND ($3::text IS NULL OR "incidentId" = $3)
+            AND "sourceType" != 'ops-query'
           ORDER BY "rank" DESC, "occurredAt" DESC
           LIMIT $4
         `,

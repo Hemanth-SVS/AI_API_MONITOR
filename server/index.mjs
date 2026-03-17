@@ -161,6 +161,13 @@ const validateMonitorPayload = (payload) => {
     return "Monitor type is required.";
   }
 
+  if (["http", "keyword", "json-query"].includes(payload.type)) {
+    const url = String(payload.url ?? payload.config?.url ?? "").trim();
+    if (!url || url === "https://" || url === "http://") {
+      return "A valid URL is required for HTTP monitors.";
+    }
+  }
+
   return null;
 };
 

@@ -271,6 +271,18 @@ export const MonitorDetailView = ({
                     <p className="mt-3 text-sm leading-relaxed text-emerald-100/80">{analysis.probableRootCause}</p>
                   </div>
 
+                  {analysis.reasoning ? (
+                    <details className="group rounded-[1.2rem] border border-emerald-500/20 bg-[#0b1118]/80 backdrop-blur-sm [&_summary::-webkit-details-marker]:hidden">
+                      <summary className="flex cursor-pointer items-center justify-between p-4 transition-colors hover:bg-emerald-500/5">
+                        <p className="text-sm font-medium leading-none text-emerald-100">Analyst Reasoning</p>
+                        <ChevronDown className="h-4 w-4 text-emerald-500/60 transition-transform group-open:rotate-180" />
+                      </summary>
+                      <div className="border-t border-emerald-500/10 px-4 pb-4 pt-3">
+                        <p className="text-sm leading-relaxed text-emerald-100/70">{analysis.reasoning}</p>
+                      </div>
+                    </details>
+                  ) : null}
+
                   <div className="space-y-4">
                     <div className="rounded-[1.2rem] border border-emerald-500/10 bg-[#0b1118]/80 p-4 backdrop-blur-sm">
                       <p className="text-sm font-medium text-emerald-100">Evidence</p>

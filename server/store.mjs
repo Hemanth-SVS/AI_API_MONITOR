@@ -35,9 +35,8 @@ const loadPgDriver = async () => {
     driverPromise = import("@electric-sql/pglite").catch((error) => {
       driverPromise = null;
       throw new Error(
-        `PGlite driver is not installed. Run "npm install @electric-sql/pglite" and restart the server. ${
-          error instanceof Error ? error.message : ""
-        }`.trim(),
+        `PGlite driver is not installed. Run "npm install @electric-sql/pglite" and restart the server. ${error instanceof Error ? error.message : ""
+          }`.trim(),
       );
     });
   }

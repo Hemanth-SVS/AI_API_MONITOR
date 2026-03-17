@@ -95,6 +95,7 @@ export interface MonitorAnalysis {
   provider?: string;
   model: string;
   status: "queued" | "running" | "completed" | "failed";
+  reasoning?: string;
   facts: string[];
   probableRootCause: string;
   confidence: number;
