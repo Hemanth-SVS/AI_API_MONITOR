@@ -9,23 +9,6 @@ Auto-Ops Sentinel is an API health monitoring workspace with a local-SLM inciden
 
 ## Run it
 
-### Option 1: Docker (Recommended)
-
-```sh
-docker compose up
-```
-
-This will start:
-- PostgreSQL database on port 5432
-- Backend API on port 8787
-
-Then in a new terminal:
-```sh
-npm run dev:client
-```
-
-### Option 2: Manual Setup
-
 Open two terminals:
 
 ```sh
@@ -38,7 +21,7 @@ npm run dev:client
 ```
 
 The frontend runs on `http://localhost:8080` and proxies `/api` calls to the backend on `http://127.0.0.1:8787`.
-The backend now reads `.env` automatically when you start it with `npm run dev:server`.
+The backend reads `.env` automatically when you start it with `npm run dev:server`.
 
 ## PostgreSQL
 
