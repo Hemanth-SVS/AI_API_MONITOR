@@ -254,7 +254,7 @@ export const MonitorDetailView = ({
               </div>
               <div className="flex items-center gap-4">
                 <div className="hidden sm:inline-flex w-fit items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.15)_inset]">
-                  {status?.slm.reachable ? "Live" : "Fallback"} • {analysis?.model ?? status?.slm.model ?? "pending"}
+                  {status?.slm.reachable ? "Live" : "Fallback"} • {status?.slm.model ?? (analysis?.model !== "fallback-rules" ? analysis?.model : null) ?? "pending"}
                 </div>
                 <ChevronDown className="h-5 w-5 text-emerald-500/60 transition-transform group-open:rotate-180" />
               </div>

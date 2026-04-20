@@ -285,6 +285,9 @@ const listAvailableModels = (payload, provider) => {
         const normalized = String(name ?? "").trim();
         if (normalized) {
           names.add(normalized);
+          // Also add the base name without tag (e.g. 'mistral' from 'mistral:latest')
+          const baseOnly = normalized.split(":")[0];
+          if (baseOnly) names.add(baseOnly);
         }
       }
     }
@@ -302,34 +305,18 @@ const listAvailableModels = (payload, provider) => {
   return [...names];
 };
 
-const withRetry = async (fn, maxRetries = 2, baseDelayMs = 500) => {
-  let attempt = 0;
-  while (true) {
-    try {
-      return await fn();
-    } catch (error) {
-      attempt++;
-      if (attempt > maxRetries) {
-        throw error;
-      }
-      
-      const isRetryable = error.name === "TimeoutError" || 
-                          error.message.includes("429") || 
-                          error.message.includes("503") ||
-                          error.message.includes("502");
-                          
-      if (!isRetryable) {
-        throw error;
-      }
-      
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
-      console.warn(`[SLM] Attempt ${attempt} failed, retrying in ${delay}ms... (${error.message})`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
+const modelMatches = (configuredModel, availableModels) => {
+  if (!availableModels.length) return true; // can't verify, assume ok
+  const configured = String(configuredModel ?? "").toLowerCase().trim();
+  const configuredBase = configured.split(":")[0];
+  return availableModels.some((m) => {
+    const available = m.toLowerCase().trim();
+    const availableBase = available.split(":")[0];
+    return available === configured || availableBase === configuredBase;
+  });
 };
 
-const generateText = async (prompt, { format, systemMessage } = {}) => {
+const generateText = async (prompt, { format } = {}) => {
   const slmConfig = await getSlmSettings({ includeSecrets: true });
 
   const executeRequest = async () => {
@@ -369,6 +356,8 @@ const generateText = async (prompt, { format, systemMessage } = {}) => {
           ...(isJsonFormat ? { format: jsonSchema || "json" } : {}),
           options: {
             temperature: 0.1,
+            num_ctx: 3072,
+            num_predict: 350,
             top_k: 20,
             top_p: 0.9,
             num_ctx: 2048,
@@ -489,9 +478,10 @@ export const checkSlmAvailability = async ({ force = false } = {}) => {
     const payload = await response.json();
     const availableModels = listAvailableModels(payload, slmConfig.provider);
 
-    if (availableModels.length > 0 && !availableModels.includes(slmConfig.model)) {
-      throw new Error(`Configured model "${slmConfig.model}" is not currently available.`);
+    if (availableModels.length > 0 && !modelMatches(slmConfig.model, availableModels)) {
+      throw new Error(`Configured model "${slmConfig.model}" is not currently available. Available: ${availableModels.slice(0, 5).join(", ")}`);
     }
+
 
     cachedAvailability = {
       checkedAt: now,
@@ -584,8 +574,35 @@ Be concise and direct. Max 3 sentences. Output plain text only.
 If the evidence does not contain relevant information, say so briefly.`;
 
 const buildOpsPrompt = ({ question, dashboardSnapshot, monitorContext, incidentContext, retrievalMatches, timeWindow }) => `
-Dashboard state:
-${truncateTextTokens(JSON.stringify(dashboardSnapshot, null, 2), 1500)}
+You are Auto-Ops Sentinel, an expert SRE analyst. Provide a concise, actionable analysis.
+
+STRUCTURE YOUR RESPONSE EXACTLY AS:
+
+**Problem Identified:**
+- One clear sentence stating what is wrong
+
+**Root Cause:**
+- The specific technical reason for the issue
+
+**Impact:**
+- What systems/users are affected
+
+**Suggested Fixes (Actionable):**
+1. First specific fix step
+2. Second specific fix step
+3. Third specific fix step (if needed)
+
+**Current Status:**
+- Up/Down/Degraded count and any active incidents
+
+RULES:
+- Be extremely concise - max 2-3 sentences per section
+- No rambling or generic advice
+- Focus on the specific incident/question asked
+- If evidence is weak, say "Insufficient data" and suggest what to check
+
+Dashboard:
+${JSON.stringify(dashboardSnapshot, null, 2)}
 
 Selected monitor context:
 ${truncateTextTokens(JSON.stringify(monitorContext, null, 2), 1000)}
