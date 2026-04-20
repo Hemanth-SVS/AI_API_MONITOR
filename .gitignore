@@ -28,4 +28,13 @@ server/runtime/
 sentinel-db/
 *.db
 *.sqlite
+<<<<<<< HEAD
 sentinel-db.bak/
+=======
+# Ignore all database backup files
+*.bak
+# Ignore the specific base directory where these are stored
+**/base/
+sentinel-db.bak*
+*.pptx
+>>>>>>> c7825dc (update gitignore and project files)
