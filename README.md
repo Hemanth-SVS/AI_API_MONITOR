@@ -62,32 +62,32 @@ Retention defaults to "keep everything". If you want limits, set:
 
 ## Local SLM
 
-The application uses an Ollama-compatible endpoint for incident response and the Chat Analyst. **Note:** AI models are very large files and should not be pushed directly to GitHub. Instead, team members should download the model locally.
+The application uses a custom Python FastAPI server to serve a fine-tuned LLaMA 3.2 3B model (with PEFT LoRA adapters) for highly accurate incident response and conversational analysis. **Note:** Ensure your HuggingFace environment is authenticated if downloading base models for the first time.
 
-### Setting up the Model
+### Setting up the Python Model Server
 
-1. Install [Ollama](https://ollama.com/) on your system.
-2. Download and run the recommended model:
+1. Activate your Python environment:
    ```sh
-   ollama run qwen2.5:0.5b
+   source .venv/bin/activate
    ```
+2. Start the local API server:
+   ```sh
+   python server.py
+   ```
+The Python server exposes an OpenAI-compatible `/chat/completions` API on `http://127.0.0.1:8000`. By default, the model runs on the CPU to prevent out-of-memory errors on 6GB GPUs, so generating responses may take a few minutes per message.
 
-The backend expects an Ollama-compatible endpoint by default:
+### Node Backend Settings
 
-- `SLM_BASE_URL=http://127.0.0.1:11434`
+Ensure your `.env` is configured correctly to communicate with the local Python server without hitting early timeout limits:
+
+- `SLM_BASE_URL=http://127.0.0.1:8000`
+- `SLM_PROVIDER=openai-compatible`
 - `SLM_MODEL=llama3.2:3b`
-- `SLM_TIMEOUT_MS=20000`
+- `SLM_TIMEOUT_MS=300000` (5 minutes)
 
-If the model is unavailable, the app falls back to a rule-based RCA engine so the dashboard still works.
-If Ollama is already running on `127.0.0.1:11434`, do not start `ollama serve` again.
+If the model is unavailable or taking too long, the app safely falls back to a rule-based RCA engine so the dashboard remains functional.
 
-You can now change the SLM connection in the UI from the `SLM Settings` button:
-
-- base URL
-- model
-- timeout
-
-Those settings are saved in PostgreSQL and used for future analysis runs without editing code.
+You can also change the SLM connection dynamically in the UI using the `SLM Settings` button. Those settings are gracefully saved in PostgreSQL for future analysis runs.
 
 ## Scripts
 

@@ -25,7 +25,7 @@ const normalizeProvider = (value) => String(value ?? DEFAULT_SLM_PROVIDER).trim(
 
 const sanitizeTimeout = (value) => {
   const timeoutMs = Number(value);
-  return Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(120_000, Math.round(timeoutMs))) : DEFAULT_SLM_TIMEOUT_MS;
+  return Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(600_000, Math.round(timeoutMs))) : DEFAULT_SLM_TIMEOUT_MS;
 };
 
 const getConfiguredDatabaseName = () => "embedded";

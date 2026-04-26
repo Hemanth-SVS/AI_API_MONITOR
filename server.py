@@ -24,10 +24,11 @@ def load_model():
         # Fallback if tokenizer not fully present in adapter dir
         tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
         
+    target_device = "cpu" # Force CPU since 6GB GPU runs out of memory
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
         torch_dtype=torch.float16,
-        device_map="auto",
+        device_map={"": target_device},
         trust_remote_code=True
     )
     
@@ -62,7 +63,7 @@ async def get_models():
     }
 
 @app.post("/chat/completions")
-async def chat_completions(req: ChatCompletionRequest):
+def chat_completions(req: ChatCompletionRequest):
     if not model or not tokenizer:
         raise HTTPException(status_code=503, detail="Model is still loading")
 
