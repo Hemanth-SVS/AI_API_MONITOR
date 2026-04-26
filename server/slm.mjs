@@ -316,7 +316,7 @@ const modelMatches = (configuredModel, availableModels) => {
   });
 };
 
-const generateText = async (prompt, { format } = {}) => {
+const generateText = async (prompt, { format, systemMessage } = {}) => {
   const slmConfig = await getSlmSettings({ includeSecrets: true });
 
   const executeRequest = async () => {
@@ -436,7 +436,7 @@ const generateText = async (prompt, { format } = {}) => {
     throw new Error(`Unsupported SLM provider "${slmConfig.provider}".`);
   };
 
-  return withRetry(executeRequest);
+  return executeRequest();
 };
 
 export const getSlmConfig = async () => getSlmSettings();
